@@ -18,6 +18,7 @@ import busio
 import digitalio
 import adafruit_rfm9x
 import numpy as np
+import atexit
 
 RADIO_FREQ_MHZT = 868.0  # Frequency of the radio in Mhz. Must match your
 RADIO_FREQ_MHZR = 869.0
@@ -63,12 +64,15 @@ tun.config(ip="192.168.2.16", mask="255.255.255.0", gateway="192.168.0.1")
 # Set up UDP tunnel
 RECEIVER_IP = "192.168.0.193" # Should be receiver's IP on the local network
 MY_IP = "192.168.0.170" # Should be this node's IP on the local network
-UDP_PORT = 4000
+UDP_PORT = 4001
 
 tx_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
 rx_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 rx_sock.bind((MY_IP, UDP_PORT))
+
+def exit_handler():
+    tun.close()
 
 def transmit(counterT):
     start_transmit = time.monotonic()
@@ -76,10 +80,11 @@ def transmit(counterT):
 
     while True:
         # send a broadcast message from my_node with ID = counter
-        buffer = bytes("startup message nr {} from pi 17 node {} ".format(counterT, rfm9xT.node), "UTF-8")
-        tx_sock.sendto( buffer, (RECEIVER_IP, UDP_PORT))
-        #sent = rfm9xT.send(buffer)    
-        transmitted.append(len(buffer))
+        buf = tun.read(1024)
+        #print("TUN BUFFER: ", buf)
+        #buffer = bytes("startup message nr {} from pi 17 node {} ".format(counterT, rfm9xT.node), "UTF-8")
+        tx_sock.sendto( buf, (RECEIVER_IP, UDP_PORT))
+        transmitted.append(len(buf))
         counterT = counterT + 1
         if time.monotonic() - start_transmit >= 1:
             total_time = time.monotonic() - start_transmit
@@ -92,11 +97,10 @@ def receive():
     received = []
     while True:
         rcvd, addr = rx_sock.recvfrom(1024)
-        #packet = rfm9xR.receive(with_header=True, timeout=5)
-        #print("Received ", packet)
         if rcvd is not None:
-            #print("Received (raw header):", [hex(x) for x in packet[0:4]])
-            #print("Received (raw payload): {0}".format(packet[4:]))
+            print("Received (raw header):", [hex(x) for x in rcvd[0:4]])
+            tun.write(rcvd)
+            #print("Received (raw payload): {0}".format(rcvd[4:]))
             #print("Received RSSI: {0}".format(rfm9xR.last_rssi))
             received.append(len(rcvd))
             if time.monotonic() - start_receive >= 1:
@@ -106,6 +110,7 @@ def receive():
                 received = []
 
 if __name__ == "__main__":
+    atexit.register(exit_handler)
     tx_process = Process(target=transmit, kwargs={'counterT': counterT})
     rx_process = Process(target=receive)
     
@@ -115,4 +120,4 @@ if __name__ == "__main__":
     
     tx_process.join()
     rx_process.join()
-    tun.close()
+    
