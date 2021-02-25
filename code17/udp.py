@@ -1,14 +1,3 @@
-#while True:
-    # Read from TUN interface
-    #buf= tun.read(252)
-    #print(buf)
-
-    # Writeto TUN interface
-    #tun.write(buf)
-
-    # Close and destroyinterface
-    # tun.close()
-# ----------------------------------------------------------------
 from multiprocessing import Process
 from tuntap import TunTap
 import socket
@@ -59,7 +48,7 @@ counterR = 0
 iface= 'tun0'
 # Createand configurea TUN interface
 tun = TunTap(nic_type="Tun", nic_name="tun0")
-tun.config(ip="192.168.2.16", mask="255.255.255.0", gateway="192.168.0.1")
+tun.config(ip="192.168.2.16", mask="255.255.255.0", gateway="192.168.2.15")
 
 # Set up UDP tunnel
 RECEIVER_IP = "192.168.0.193" # Should be receiver's IP on the local network
