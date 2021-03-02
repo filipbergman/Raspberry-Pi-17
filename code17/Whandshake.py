@@ -10,50 +10,50 @@ import numpy as np
 import atexit
 import ipaddress
 
-RADIO_FREQ_MHZR = 868.0  # Frequency of the radio in Mhz. Must match your
-RADIO_FREQ_MHZT = 869.0
+RADIO_FREQ_MHZT = 868.0  # Frequency of the radio in Mhz. Must match your
+RADIO_FREQ_MHZR = 869.0
 
-CSR = digitalio.DigitalInOut(board.CE1)
-RESETR = digitalio.DigitalInOut(board.D25)
+CS = digitalio.DigitalInOut(board.CE1)
+RESET = digitalio.DigitalInOut(board.D25)
 
-CST = digitalio.DigitalInOut(board.D17)
-RESETT = digitalio.DigitalInOut(board.D4)
+CS2 = digitalio.DigitalInOut(board.D17)
+RESET2 = digitalio.DigitalInOut(board.D5)
 
 spiR = busio.SPI(board.SCK, MOSI=board.MOSI, MISO=board.MISO)
 spiT = busio.SPI(board.D21, MOSI=board.D20, MISO=board.D19)
 
-rfm9xR = adafruit_rfm9x.RFM9x(spiR, CSR, RESETR, RADIO_FREQ_MHZR)
-rfm9xT = adafruit_rfm9x.RFM9x(spiT, CST, RESETT, RADIO_FREQ_MHZT)
+rfm9xR = adafruit_rfm9x.RFM9x(spiR, CS, RESET, RADIO_FREQ_MHZR)
+rfm9xT = adafruit_rfm9x.RFM9x(spiT, CS2, RESET2, RADIO_FREQ_MHZT)
 
-# Radio 1: Receiver
-# enable CRC checking
-#rfm9xR.enable_crc = True
-rfm9xR.node = 3
-rfm9xR.destination = 4
-rfm9xR.spreading_factor = 10
-#rfm9xR.signal_bandwidth = 125000
-counterR = 0
-
-# Radio 2: Transmitter NOT WORKING
+# Radio 1: Transmitter
 # enable CRC checking
 #rfm9xT.enable_crc = True
-rfm9xT.node = 1
-rfm9xT.destination = 2
+rfm9xT.node = 4
+rfm9xT.destination = 3
 rfm9xT.tx_power = 5
 rfm9xT.spreading_factor = 10
 rfm9xT.ack_retries = 1
 #rfm9xT.signal_bandwidth = 125000
 counterT = 0
 
-iface= 'tun1'
-tun = TunTap(nic_type="Tun", nic_name="tun1")
+# Radio 2: Receiver NOT WOKRING
+# enable CRC checking
+#rfm9xR.enable_crc = True
+rfm9xR.node = 2
+rfm9xR.destination = 1
+rfm9xR.spreading_factor = 10
+#rfm9xT.signal_bandwidth = 125000
+counterR = 0
+
+iface= 'tun0'
+tun = TunTap(nic_type="Tun", nic_name="tun0")
 #tun.config(ip="192.168.2.100", mask="255.255.255.0", gateway="192.168.0.1")
 tun_ip = ""
 
 # Set up UDP tunnel
 RECEIVER_IP = "192.168.0.193" # Should be receiver's IP on the local network
 MY_IP = "192.168.0.170" # Should be this node's IP on the local network
-UDP_PORT = 4003
+UDP_PORT = 4002
 
 tx_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
@@ -64,35 +64,35 @@ def exit_handler():
     tun.close()
 
 def transmit_message(message):
-    tx_sock.sendto(message, (RECEIVER_IP, UDP_PORT))
+    #tx_sock.sendto(message, (RECEIVER_IP, UDP_PORT))
+    rfm9xT.send(message)
+
 
 def transmit():
     while True: # Checks that tun interface has an ip address
         buf = tun.read(1024)
         print("TUN BUFFER: ", buf)
-        tx_sock.sendto( buf, (RECEIVER_IP, UDP_PORT))
+        #tx_sock.sendto( buf, (RECEIVER_IP, UDP_PORT))
+        rfm9xT.send(buf)
 
 def receive():
     while True:
-        rcvd, addr = rx_sock.recvfrom(1024)
-        
-        if rcvd is not None:
+        #rcvd, addr = rx_sock.recvfrom(1024)
+        packet = rfm9xR.receive(with_header=True, timeout=5)
+
+        if packet is not None:
             # If ipv4 packet, write to tun interface:
             
-            rcvd_hex = rcvd.hex()
-            print("hex: ", rcvd_hex[:2])
-            if rcvd_hex[:2] == "45": 
-                print("WRITE TO TUN")
-                tun.write(rcvd)
-            elif rcvd_hex[:2] == "31":
+            packet_hex = packet.hex()
+            print("hex: ", packet_hex)
+            if packet_hex[:2] != "02": 
+                tun.write(packet)
+            elif packet_hex[:2] == "02":
                 # if not ip packet, decode:
-                rcvd = rcvd.decode()
-                print("Handshake1")
-                handshake(rcvd[0], rcvd[1:])
-
+                packet = packet.decode()
+                handshake(packet[4], packet[5:])
 
 def handshake(frame_type, data):
-    print("RECEIVED")
     print("FRAME TYPE: ", frame_type)
     print("data: ", data)
 
@@ -108,17 +108,15 @@ def handshake(frame_type, data):
                 tun_ip += "."
         print("IP: ", tun_ip)
         tun.config(ip=tun_ip, mask="255.255.255.0", gateway="192.168.0.1")
+        # TODO: here we want the tun interface to start reading
 
 def sensor_value_sender():
     ip = ipaddress.IPv4Address('192.168.2.5')
-    control_frame = frame(1, ip)
-    control_frame_bits = control_frame.createControlFrame()
-    transmit_message(control_frame_bits)
+    f1 = frame(1, ip)
+    frame_bits = f1.createFrame()
+    #transmit_message(frame_bits)
     #while True:
-    data = "('coffee', 'Espresso', 3.19)"
-    data_frame = frame(0, data)
-    data_frame_bits = data_frame.createDataFrame()
-    transmit_message(data_frame_bits)
+    transmit_message(frame_bits)
 
 class frame:
     frame_type = 0
@@ -129,19 +127,11 @@ class frame:
         self.frame_type = frame_type
         self.data = data
 
-    def createControlFrame(self): 
+    def createFrame(self): 
         frame = format(self.frame_type, "b")
         data_int = int(self.data)
         data_bit = format(data_int, "032b")
-        print("DATA_BIT: ", data_bit)
         frame += data_bit
-        return frame.encode()
-    
-    def createDataFrame(self): 
-        frame = format(self.frame_type, "b")
-        #data_bytes = self.data.encode("utf-8")
-        #print("DATA_BYTES: ", data_bytes)
-        frame += self.data
         return frame.encode()
 
     def frame_from_bits(self):

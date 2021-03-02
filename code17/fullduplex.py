@@ -67,6 +67,7 @@ def receive():
             #print("Received (raw header):", [hex(x) for x in packet[0:4]])
             print("Received (raw payload): {0}".format(packet[4:]))
             print("Received RSSI: {0}".format(rfm9xR.last_rssi))
+            print("PACKET LENGTH: ", (len(packet)))
             received.append(len(packet))
             if time.monotonic() - start_receive >= 1:
                 total_time_r = time.monotonic() - start_receive
