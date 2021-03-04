@@ -77,8 +77,8 @@ def receive():
         rcvd, addr = rx_sock.recvfrom(1024)
         
         if rcvd is not None:
+            print("RECEIVED")
             # If ipv4 packet, write to tun interface:
-            
             rcvd_hex = rcvd.hex()
             print("hex: ", rcvd_hex[:2])
             if rcvd_hex[:2] == "45": 
@@ -87,15 +87,11 @@ def receive():
             elif rcvd_hex[:2] == "31":
                 # if not ip packet, decode:
                 rcvd = rcvd.decode()
-                print("Handshake1")
+                print("Handshake")
                 handshake(rcvd[0], rcvd[1:])
 
 
 def handshake(frame_type, data):
-    print("RECEIVED")
-    print("FRAME TYPE: ", frame_type)
-    print("data: ", data)
-
     if frame_type == "0":
         print("\nData plane\n")
     elif frame_type == "1":
@@ -110,15 +106,21 @@ def handshake(frame_type, data):
         tun.config(ip=tun_ip, mask="255.255.255.0", gateway="192.168.0.1")
 
 def sensor_value_sender():
-    ip = ipaddress.IPv4Address('192.168.2.5')
+    ip = ipaddress.IPv4Address('192.168.2.2')
     control_frame = frame(1, ip)
     control_frame_bits = control_frame.createControlFrame()
     transmit_message(control_frame_bits)
-    #while True:
-    data = "('coffee', 'Espresso', 3.19)"
-    data_frame = frame(0, data)
-    data_frame_bits = data_frame.createDataFrame()
-    transmit_message(data_frame_bits)
+    # Send new data regularly to the database
+    i = 0
+    start_time = time.monotonic()
+    while True:
+        if time.monotonic() > start_time + 1:
+            data = "tea," + str(i) + ",3.19\n"
+            data_frame = frame(0, data)
+            data_frame_bits = data_frame.createDataFrame()
+            transmit_message(data_frame_bits)
+            i += 1
+            start_time = time.monotonic()
 
 class frame:
     frame_type = 0
@@ -139,18 +141,8 @@ class frame:
     
     def createDataFrame(self): 
         frame = format(self.frame_type, "b")
-        #data_bytes = self.data.encode("utf-8")
-        #print("DATA_BYTES: ", data_bytes)
         frame += self.data
         return frame.encode()
-
-    def frame_from_bits(self):
-        return 0
-
-    def translate_ip(self, bit_ip):
-        ip = 0
-        return ip
-
            
 if __name__ == "__main__":
     atexit.register(exit_handler)

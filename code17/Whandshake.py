@@ -45,57 +45,54 @@ rfm9xR.spreading_factor = 10
 #rfm9xT.signal_bandwidth = 125000
 counterR = 0
 
-iface= 'tun0'
-tun = TunTap(nic_type="Tun", nic_name="tun0")
+iface= 'tun2'
+tun = TunTap(nic_type="Tun", nic_name="tun2")
 #tun.config(ip="192.168.2.100", mask="255.255.255.0", gateway="192.168.0.1")
 tun_ip = ""
-
-# Set up UDP tunnel
-RECEIVER_IP = "192.168.0.193" # Should be receiver's IP on the local network
-MY_IP = "192.168.0.170" # Should be this node's IP on the local network
-UDP_PORT = 4002
-
-tx_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-
-rx_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-rx_sock.bind((MY_IP, UDP_PORT))
 
 def exit_handler():
     tun.close()
 
 def transmit_message(message):
     #tx_sock.sendto(message, (RECEIVER_IP, UDP_PORT))
+    print("SENDING: ", message.hex())
     rfm9xT.send(message)
 
+def bits_to_bytes(bits: str):
+    return bytes(int(bits[i:i + 8], 2) for i in range(0, len(bits), 8))
 
 def transmit():
     while True: # Checks that tun interface has an ip address
-        buf = tun.read(1024)
+        buf = tun.read(252)
         print("TUN BUFFER: ", buf)
         #tx_sock.sendto( buf, (RECEIVER_IP, UDP_PORT))
         rfm9xT.send(buf)
 
 def receive():
+    start_transmit = time.monotonic()
+    transmitted = []
+
     while True:
-        #rcvd, addr = rx_sock.recvfrom(1024)
         packet = rfm9xR.receive(with_header=True, timeout=5)
 
         if packet is not None:
             # If ipv4 packet, write to tun interface:
-            
             packet_hex = packet.hex()
+            
             print("hex: ", packet_hex)
-            if packet_hex[:2] != "02": 
-                tun.write(packet)
+            print("PACKET: ", bytes(packet[4:]))
+            if packet_hex[8:10] == "45": 
+                tun.write(bytes(packet[4:]))
             elif packet_hex[:2] == "02":
-                # if not ip packet, decode:
-                packet = packet.decode()
-                handshake(packet[4], packet[5:])
+                # if not  packet, decode:
+                payload = ""
+                for i in range(0, 9):
+                    payload += str(format(int(packet_hex[i*2:(i*2)+2], 16), "08b")) # Translates each octet from bits to decimal
+                
+                print(payload[39], " - ", payload[40:])
+                control_packet(payload[39], payload[40:])
 
-def handshake(frame_type, data):
-    print("FRAME TYPE: ", frame_type)
-    print("data: ", data)
-
+def control_packet(frame_type, data):
     if frame_type == "0":
         print("\nData plane\n")
     elif frame_type == "1":
@@ -108,38 +105,53 @@ def handshake(frame_type, data):
                 tun_ip += "."
         print("IP: ", tun_ip)
         tun.config(ip=tun_ip, mask="255.255.255.0", gateway="192.168.0.1")
-        # TODO: here we want the tun interface to start reading
 
 def sensor_value_sender():
     ip = ipaddress.IPv4Address('192.168.2.5')
-    f1 = frame(1, ip)
-    frame_bits = f1.createFrame()
+    control_frame = frame(1, ip)
+    control_frame_bits = control_frame.createControlFrame()
+    transmit_message(control_frame_bits)
     #transmit_message(frame_bits)
-    #while True:
-    transmit_message(frame_bits)
+
+    i = 0
+    start_time = time.monotonic()
+    while True: # TODO
+        if time.monotonic() > start_time + 1:
+            data = "tea," + str(i) + ",3.19\n"
+            data_frame = frame(0, data)
+            data_frame_bits = data_frame.createDataFrame()
+            transmit_message(data_frame_bits)
+            i += 1
+            start_time = time.monotonic()
 
 class frame:
     frame_type = 0
     data = 0
     frame = 0
+    length = 0
 
     def __init__(self, frame_type, data):
         self.frame_type = frame_type
         self.data = data
 
-    def createFrame(self): 
-        frame = format(self.frame_type, "b")
+    def createControlFrame(self):
+        frame = format(self.frame_type, "08b") # frane_type is on index 7 
         data_int = int(self.data)
         data_bit = format(data_int, "032b")
+        #print("DATA_BIT: ", data_bit)
         frame += data_bit
-        return frame.encode()
+        return bits_to_bytes(frame)
+    
+    def createDataFrame(self): # TODO convert text to bytes
+        frame = format(self.frame_type, "08b")
+        data_bits = ''.join(format(ord(i), '08b') for i in self.data)
+        #print("BITs: ", data_bits)
+        for i in range(512 - len(data_bits)):
+            data_bits += "0"
 
-    def frame_from_bits(self):
-        return 0
-
-    def translate_ip(self, bit_ip):
-        ip = 0
-        return ip
+        #print("DATA_BIT: ", data_bits)
+        frame += data_bits
+        return bits_to_bytes(frame)
 
            
 if __name__ == "__main__":
