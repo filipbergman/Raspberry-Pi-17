@@ -9,6 +9,7 @@ import adafruit_rfm9x
 import numpy as np
 import atexit
 import ipaddress
+import random
 
 RADIO_FREQ_MHZR = 868.0  # Frequency of the radio in Mhz. Must match your
 RADIO_FREQ_MHZT = 869.0
@@ -45,8 +46,8 @@ rfm9xT.ack_retries = 1
 #rfm9xT.signal_bandwidth = 125000
 counterT = 0
 
-iface= 'tun1'
-tun = TunTap(nic_type="Tun", nic_name="tun1")
+iface= 'lg'
+tun = TunTap(nic_type="Tun", nic_name="lg")
 #tun.config(ip="192.168.2.100", mask="255.255.255.0", gateway="192.168.0.1")
 tun_ip = ""
 
@@ -64,6 +65,7 @@ def exit_handler():
     tun.close()
 
 def transmit_message(message):
+    print("SENT AT: ", time.monotonic())
     tx_sock.sendto(message, (RECEIVER_IP, UDP_PORT))
 
 def transmit():
@@ -73,10 +75,20 @@ def transmit():
         tx_sock.sendto( buf, (RECEIVER_IP, UDP_PORT))
 
 def receive():
+    start_receive = time.monotonic()
+    received = []
+
     while True:
         rcvd, addr = rx_sock.recvfrom(1024)
         
         if rcvd is not None:
+            received.append(len(rcvd))
+            if time.monotonic() - start_receive >= 1:
+                total_time_r = time.monotonic() - start_receive
+                print("1 second has passed! Receive Bitrate: {}", np.sum(received)*8/total_time_r)
+                start_receive = time.monotonic()
+                received = []
+
             print("RECEIVED")
             # If ipv4 packet, write to tun interface:
             rcvd_hex = rcvd.hex()
@@ -94,6 +106,7 @@ def receive():
 def handshake(frame_type, data):
     if frame_type == "0":
         print("\nData plane\n")
+        # TODO write out database value
     elif frame_type == "1":
         print("\nControl plane\n")
         print("my ip: ", data)
@@ -106,16 +119,26 @@ def handshake(frame_type, data):
         tun.config(ip=tun_ip, mask="255.255.255.0", gateway="192.168.0.1")
 
 def sensor_value_sender():
+    # Get ip address
     ip = ipaddress.IPv4Address('192.168.2.2')
     control_frame = frame(1, ip)
     control_frame_bits = control_frame.createControlFrame()
     transmit_message(control_frame_bits)
-    # Send new data regularly to the database
+
+    # Send random data to base station
     i = 0
     start_time = time.monotonic()
     while True:
-        if time.monotonic() > start_time + 1:
-            data = "tea," + str(i) + ",3.19\n"
+        if time.monotonic() > start_time + 0.1: # Send different data
+            if i % 3 == 0:
+                temp = random.randint(-3, 10)
+                data = "temperature,lund," + str(temp) + " degr C\n"
+            elif i % 3 == 1:
+                pressure = random.randint(990, 1050)
+                data = "pressure,lund," + str(pressure) + "hPa\n"
+            elif i % 3 == 2:
+                level = random.randint(0, 4)
+                data = "waterlevel,stockholm," + str(level) + "mm\n"
             data_frame = frame(0, data)
             data_frame_bits = data_frame.createDataFrame()
             transmit_message(data_frame_bits)

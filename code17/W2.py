@@ -29,84 +29,97 @@ rfm9xT = adafruit_rfm9x.RFM9x(spiT, CS2, RESET2, RADIO_FREQ_MHZT)
 
 # Radio 1: Transmitter
 # enable CRC checking
-#rfm9xT.enable_crc = True
-rfm9xT.node = 4
-rfm9xT.destination = 3
+rfm9xT.enable_crc = True
+rfm9xT.destination = 3 # SAME FOR ALL MOBILE UNITS
 rfm9xT.tx_power = 5
 rfm9xT.spreading_factor = 10
-rfm9xT.ack_retries = 1
-#rfm9xT.signal_bandwidth = 125000
-counterT = 0
+#rfm9xT.ack_retries = 1
 
 # Radio 2: Receiver NOT WOKRING
 # enable CRC checking
-#rfm9xR.enable_crc = True
-rfm9xR.node = 2
-rfm9xR.destination = 1
+rfm9xR.enable_crc = True
+rfm9xR.node = 2 # Needs to be changed for all other mobile units
 rfm9xR.spreading_factor = 10
-#rfm9xT.signal_bandwidth = 125000
-counterR = 0
 
-iface= 'tun2'
-tun = TunTap(nic_type="Tun", nic_name="tun2")
+iface= 'longGe'
+tun = TunTap(nic_type="Tun", nic_name="longGe")
 #tun.config(ip="192.168.2.100", mask="255.255.255.0", gateway="192.168.0.1")
 tun_ip = ""
 
 ip_set = False
+
+receive_time = 0
+sent_time = 0
 lock = threading.Lock()
 
 def exit_handler():
     tun.close()
 
 def transmit_message(message):
-    print("SENDING: ", message.hex())
+    global sent_time
+    sent_time = time.monotonic()
+    print("SENT AT: ", sent_time)
     rfm9xT.send(message)
 
 def bits_to_bytes(bits: str):
     return bytes(int(bits[i:i + 8], 2) for i in range(0, len(bits), 8))
 
 def transmit():
-    while True: # Checks that tun interface has an ip address
-        buf = tun.read(252)
-        #print("TUN BUFFER: ", buf)
-        #tx_sock.sendto( buf, (RECEIVER_IP, UDP_PORT))
+    while True:
+        buf = tun.read(512)
         rfm9xT.send(buf)
 
 def receive():
+    global receive_time
     global lock
+    start_receive = time.monotonic()
+    received = []
 
     while True:
         packet = rfm9xR.receive(with_header=True, timeout=5)
         lock.acquire()
+
         if packet is not None:
-            # If ipv4 packet, write to tun interface:
-            packet_hex = packet.hex()
+            receive_time = time.monotonic()
+
+            received.append(len(packet))
+            if time.monotonic() - start_receive >= 1:
+                total_time_r = time.monotonic() - start_receive
+                #print("1 second has passed! Receive Bitrate: {}", np.sum(received)*8/total_time_r)
+                start_receive = time.monotonic()
+                received = []
+
             
-            #print("hex: ", packet_hex)
-            #print("PACKET: ", bytes(packet[4:]))
-            if packet_hex[8:10] == "45": 
+            packet_hex = packet.hex()
+            #print("HEX: ", packet_hex)
+            if packet_hex[8:10] == "45": # 45 = Ip packet
                 tun.write(bytes(packet[4:]))
-            elif packet_hex[:2] == "02":
-                # if not  packet, decode:
+            elif packet_hex[:2] == "02": # 02 = Lora address
                 payload = ""
-                for i in range(0, 9):
-                    payload += str(format(int(packet_hex[i*2:(i*2)+2], 16), "08b")) # Translates each octet from bits to decimal
+                for i in range(0, 252):
+                    if packet_hex[i*2:] == "": # Check if we have reached end
+                        break
+                    # Translates each octet from hexadecimal to binary
+                    payload += str(format(int(packet_hex[i*2:(i*2)+2], 16), "08b")) 
                 
-                print(payload[39], " - ", payload[40:])
-                control_packet(payload[39], payload[40:])
+                ip_set = control_packet(payload[39], payload[40:])
         lock.release()
 
 def control_packet(frame_type, data):
     global ip_set
+    global sent_time
+    global receive_time
     if frame_type == "0":
-        print("\nData plane")
+        print("\nData plane\n")
     elif frame_type == "1":
-        print("\nControl plane")
+        #print("\nControl plane\n")
         if ip_set == True:
-            print("IP_SET")
+            print("ACK: ", bits_to_bytes(data).decode(), "AT: ", time.monotonic())
+            delay = int(time.monotonic()) - int(sent_time)
+            #print("NOW: ", str(int(time.monotonic())), ", SENT: ", str(int(sent_time)))
+            #print("Delay: ", str(delay), " seconds")
             return
 
-        print("my ip: ", data)
         tun_ip = ""
         for i in range(0, 4):
             tun_ip += str(int(data[i*8:(i*8)+8], 2)) # Translates each octet from bits to decimal
@@ -117,17 +130,18 @@ def control_packet(frame_type, data):
         ip_set = True
 
 def sensor_value_sender():
-    # Get ip address
-    ip = ipaddress.IPv4Address('192.168.2.5')
+    # Get ip address from base station
+    ip = ipaddress.IPv4Address('192.168.2.2')
     control_frame = frame(1, ip)
     control_frame_bits = control_frame.createControlFrame()
+    #print("SEND: ", control_frame_bits)
     transmit_message(control_frame_bits)
 
     # Send random data to base station
     i = 0
     start_time = time.monotonic()
     while True:
-        if time.monotonic() > start_time + 1: # Send different data
+        if time.monotonic() > start_time + 3: # Send different data
             if i % 3 == 0:
                 temp = random.randint(-3, 10)
                 data = "temperature,lund," + str(temp) + " degr C\n"
@@ -147,14 +161,14 @@ class frame:
     frame_type = 0
     data = 0
     frame = 0
-    length = 0
+    #length = 0
 
     def __init__(self, frame_type, data):
         self.frame_type = frame_type
         self.data = data
 
     def createControlFrame(self):
-        frame = format(self.frame_type, "08b") # frane_type is on index 7 
+        frame = format(self.frame_type, "08b") # frame_type is on index 7 
         data_int = int(self.data)
         data_bit = format(data_int, "032b")
         frame += data_bit
@@ -163,13 +177,13 @@ class frame:
     def createDataFrame(self):
         frame = format(self.frame_type, "08b")
         data_bits = ''.join(format(ord(i), '08b') for i in self.data)
-        for i in range(512 - len(data_bits)):
+
+        for i in range(512 - len(data_bits)): #512
             data_bits += "0"
 
         frame += data_bits
         return bits_to_bytes(frame)
-
-           
+   
 if __name__ == "__main__":
     atexit.register(exit_handler)
     tx_process = Process(target=transmit)
